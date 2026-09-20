@@ -47,6 +47,9 @@ dsh-multi-api-plugin:
   pools:
     ACME_GATEWAY_KEY:          # the credential reference the route resolves
       keys: [ACME_GATEWAY_KEY_1, ACME_GATEWAY_KEY_2, ACME_GATEWAY_KEY_3]
+      models:                  # optional: model-scoped slot lists
+        acme-think-large:      # matches the model id the request names
+          keys: [ACME_GATEWAY_KEY_4, ACME_GATEWAY_KEY_5]
     OPENAI_KEY:
       keys: [OPENAI_KEY_1, OPENAI_KEY_2]
       cooldownMs: 120000       # per-pool override
@@ -60,8 +63,23 @@ Every key is a reference **name**: the values live in the credential store or th
 environment, and nothing else (no secret) is ever read or written by this plugin.
 A value that is not a reference name is refused where it is written.
 
+A `models` entry gives one model id its own candidate list: a request naming that
+model draws only from the sub-pool's slots, while every other model draws from the
+pool's own `keys`. Cooldowns stay pool-level — they are keyed by *slot*, so a key
+that drew a 429 is parked for the whole pool, whichever model asked. A model entry
+without slot names is ignored with a warning, and that model draws from the pool.
+
 The document is hot-reloaded: editing a pool takes effect on the next request,
 and a pool whose definition did not change keeps its cooldowns.
+
+### Settings card
+
+The plugin ships a browser half that renders its own card under
+Settings → Plugins → Plugin settings. The card edits the pool-level slot lists —
+add or remove a pool, add or remove a slot — and saves through the settings
+scope, so the same reference-name validation applies: a value that is not a
+credential reference is refused by the host and the refusal is shown on the card.
+Model-scoped sub-pools are displayed read-only and stay hand-edited for now.
 
 ## Routing
 
@@ -119,8 +137,8 @@ Deliberate behaviours:
 
 ## Non-goals
 
-- A web settings UI and per-model pools (`llm-pi-ai` per-model config) are
-  deliberately out of scope for this version.
+- Editing model-scoped sub-pools in the settings card (the card edits the
+  pool-level slot lists; sub-pools are hand-edited) and per-slot metadata.
 - No cost budgets, no cross-provider cascade, no circuit breaker, no cooldown
   persistence: cooldowns live in the process run, which is the unit a rate limit
   applies to.

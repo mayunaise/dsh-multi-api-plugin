@@ -95,7 +95,7 @@ class GatewayAdapter extends LlmAdapter {
     const ref = this.profiles[options.provider].apiKeyEnv
     const hit = await this.credentials.resolve(credentialRef(ref))
     const key = hit?.value
-    this.seen.push({ provider: options.provider, ref, key, at: Date.now() })
+    this.seen.push({ provider: options.provider, ref, key, model: options.model, at: Date.now() })
     if (key === undefined) {
       yield { type: 'finish', reason: { kind: 'error', failure: Object.freeze({ code: 'MISSING_CREDENTIAL', message: `no credential for ${ref}` }) } }
       return
@@ -186,8 +186,8 @@ const collect = async (stream) => {
 
 const textOf = (chunks) => chunks.filter((chunk) => chunk.type === 'text-delta').map((chunk) => chunk.text).join('')
 const failureOf = (chunks) => chunks.at(-1)?.reason?.failure
-const call = (ctx, provider = 'acme-gateway') =>
-  ctx.llm.stream({ provider, model: 'acme-think', messages: [] })
+const call = (ctx, provider = 'acme-gateway', model = 'acme-think') =>
+  ctx.llm.stream({ provider, model, messages: [] })
 
 const POOL = { pools: { ACME_KEY: { keys: ['ACME_KEY_1', 'ACME_KEY_2'] } } }
 
@@ -420,4 +420,60 @@ test('a settings write that is not a credential reference is refused where it is
   )
   await assert.doesNotReject(() => scope.update({ pools: { ACME_KEY: { keys: ['ACME_KEY_1'] } } }))
   await ctx.fiber.dispose()
+})
+
+test('a model entry whose keys are not references is refused where it is written', async () => {
+  const { ctx, settings } = await harness({ values: {}, config: POOL })
+  const scope = settings.register('dsh-multi-api-plugin-write', plugin.Config, { base: {} })
+  await assert.rejects(
+    () => scope.update({ pools: { ACME_KEY: { models: { heavy: { keys: ['bad name'] } } } } }),
+    /credential reference/,
+  )
+  await ctx.fiber.dispose()
+})
+
+test('a model-scoped sub-pool serves that model from its own slots', async () => {
+  const { ctx, seen } = await harness({
+    values: { ACME_KEY_1: 'good-1', ACME_KEY_3: 'good-3' },
+    config: { pools: { ACME_KEY: { keys: ['ACME_KEY_1'], models: { 'acme-think': { keys: ['ACME_KEY_3'] } } } } },
+  })
+  const scoped = await collect(call(ctx))
+  assert.equal(textOf(scoped), 'served-by:good-3', 'the model named in the config draws its own sub-pool')
+  const plain = await collect(call(ctx, 'acme-gateway', 'acme-mini'))
+  assert.equal(textOf(plain), 'served-by:good-1', 'a model without a sub-pool draws the pool’s slots')
+  assert.deepEqual(seen.map((entry) => entry.key), ['good-3', 'good-1'])
+})
+
+test('a sub-pool failure parks the slot for the whole pool', async () => {
+  const { ctx, seen } = await harness({
+    values: { ACME_KEY_1: 'good-1', ACME_KEY_3: 'rate-limited-3', ACME_KEY_4: 'good-4' },
+    config: {
+      pools: {
+        ACME_KEY: { keys: ['ACME_KEY_3', 'ACME_KEY_1'], models: { 'acme-think': { keys: ['ACME_KEY_3', 'ACME_KEY_4'] } } },
+      },
+    },
+  })
+  const scoped = await collect(call(ctx))
+  assert.equal(textOf(scoped), 'served-by:good-4', 'the model rotates within its own sub-pool')
+  const plain = await collect(call(ctx, 'acme-gateway', 'acme-mini'))
+  assert.equal(textOf(plain), 'served-by:good-1', 'the parked slot stays parked for models without a sub-pool')
+  assert.deepEqual(seen.map((entry) => entry.key), ['rate-limited-3', 'good-4', 'good-1'])
+})
+
+test('a model entry without slot names falls back to the pool with a visible warning', async () => {
+  const { ctx, seen } = await harness({
+    values: { ACME_KEY_1: 'good-1' },
+    config: { pools: { ACME_KEY: { keys: ['ACME_KEY_1'], models: { heavy: { keys: [] } } } } },
+  })
+  const warnings = []
+  const original = ctx.logger.warn
+  ctx.logger.warn = (message) => warnings.push(message)
+  try {
+    const chunks = await collect(call(ctx, 'acme-gateway', 'heavy'))
+    assert.equal(textOf(chunks), 'served-by:good-1', 'the model draws the pool’s own slots instead of nothing')
+  } finally {
+    ctx.logger.warn = original
+  }
+  assert.equal(warnings.filter((message) => message.includes('models.heavy.keys')).length, 1)
+  assert.deepEqual(seen.map((entry) => entry.key), ['good-1'])
 })

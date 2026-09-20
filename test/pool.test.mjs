@@ -79,3 +79,25 @@ test('snapshot reports the pool without leaking anything else', () => {
   assert.equal(snapshot.coolingUntil.K1, 1000)
   assert.equal(snapshot.coolingUntil.K2, 0)
 })
+
+test('a model sub-pool rotates among its own slots and shares the pool cooldown', () => {
+  let clock = 0
+  const pool = createPool({
+    ref: 'ACME_KEY',
+    keys: ['K1'],
+    models: [['heavy', ['K3', 'K4']]],
+    cooldownMs: 1000,
+    maxCooldownMs: 10_000,
+    switchCodes: [...DEFAULT_SWITCH_CODES],
+    now: () => clock,
+  })
+  assert.equal(pool.pick('heavy').key, 'K3')
+  assert.equal(pool.pick('heavy').key, 'K4')
+  assert.equal(pool.pick('heavy').key, 'K3', 'the sub-pool rotates independently of the pool-level list')
+  assert.equal(pool.pick().key, 'K1', 'the pool-level list is untouched by the sub-pool rotation')
+  assert.equal(pool.sizeFor('heavy'), 2)
+  assert.equal(pool.sizeFor(undefined), 1)
+  pool.cool('K3', 1000)
+  assert.equal(pool.pick('heavy').key, 'K4', 'a parked slot stays out of its model’s rotation')
+  assert.deepEqual(pool.snapshot().models, [['heavy', ['K3', 'K4']]])
+})

@@ -1,0 +1,8 @@
+# dsh-multi-api-plugin bundle layer.
+#
+# Mounts the rotation plugin. It registers its own settings namespace and hooks
+# two existing seams — the credential reference resolution and the `llm/stream`
+# waterfall — so no other composition entry needs to change.
+- insert:
+    - id: dsh-multi-api-plugin
+      name: 'dsh-multi-api-plugin'
